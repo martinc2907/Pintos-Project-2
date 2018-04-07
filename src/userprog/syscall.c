@@ -14,7 +14,6 @@
 
 static void syscall_handler (struct intr_frame *);
 
-
 /* Handler declarations */
 static void halt_handler(struct intr_frame *f);
 static void exit_handler(struct intr_frame *f);
@@ -30,17 +29,18 @@ static void seek_handler(struct intr_frame *f);
 static void tell_handler(struct intr_frame *f);
 static void close_handler(struct intr_frame *f);
 
-
+/* General helper functions */
 static struct child * search_child(struct thread * t, pid_t pid);
 static struct file_info * search_file_info(int fd);
 static int add_file_info(struct file * f);
 static void init_file_lock(void);
 
+/* Helper functions for checking user pointer validity */
 static void check_user_pointer(struct intr_frame *f, void * user_ptr);
 static void check_ustack_boundaries(struct intr_frame *f, int no_of_args);
 
 /* Global variable accessed by accessible by all threads. */
-struct lock * file_lock;
+struct lock file_lock;
 
 void
 syscall_init (void) 
@@ -49,7 +49,7 @@ syscall_init (void)
 	/* Registers handler for interrupt 0x30= just means system call */
 	/* second argument is DPL- descriptor privilege level. */
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  init_file_lock();
+  lock_init(&file_lock);
 }
 
 static void
@@ -120,8 +120,6 @@ syscall_handler (struct intr_frame *f UNUSED)
 
 
 
-/* Handler definitions */
-
 static void halt_handler(struct intr_frame *f){
 	shutdown_power_off();
 }
@@ -132,25 +130,26 @@ static void exit_handler(struct intr_frame *f){
 	struct thread * cur;
 	struct child * c;
 
+	/* Get arguments from user stack */
 	exit_status = *((int * )(f->esp + 4));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 
 
 	cur = thread_current();
 	pid = cur->tid;
-
 	c = search_child(cur->parent, pid);
 
 	/* Need to give exit status to child struct owned by parent. */
 	if(c != NULL){//c will be null if parent exited already. 
 		c->exit_status = exit_status;
-		/* Up mutex */
+		/* Up mutex- unblocks parent if waiting on child */
 		sema_up(&c->sema);	
 	}
 
-
 	printf ("%s: exit(%d)\n", thread_current()->file_name,exit_status);
-	thread_exit(); //CHECK IF I NEED TO FREE EVERYTHING.
+	thread_exit();
 }
 
 static void exec_handler(struct intr_frame *f){
@@ -171,11 +170,15 @@ static void wait_handler(struct intr_frame *f){
 	pid_t pid;
 	int exit_status;
 
+	/* Get arguments from user stack */
 	pid = *((int *)(f->esp + 4));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 
 	exit_status = process_wait(pid);
 
+	/* Return child's exit status */
 	f->eax = exit_status;
 }
 
@@ -184,16 +187,18 @@ static void create_handler(struct intr_frame *f){
 	char * file;
 	unsigned initial_size; 
 
+	/* Get arguments from user stack */
 	file = *((char **)(f->esp + 4));
 	initial_size = *((unsigned *)(f->esp + 8));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 2); //2 arg
 	check_user_pointer(f,file);
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	success = filesys_create(file,initial_size);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
-	/* Put exit_status to eax in intr_frame */
 	f->eax = success;
 }
 
@@ -201,15 +206,17 @@ static void remove_handler(struct intr_frame *f){
 	bool success;
 	char * file;
 
+	/* Get arguments from user stack */
 	file = *((char **)(f->esp + 4));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 	check_user_pointer(f,file);
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	success = filesys_remove(file);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
-	/* Put exit_status to eax in intr_frame */
 	f->eax = success;
 }
 
@@ -218,22 +225,25 @@ static void open_handler(struct intr_frame *f){
 	struct file * file;
 	char * name;
 
-
+	/* Get arguments from user stack */
 	name = *((char **)(f->esp+4));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 	check_user_pointer(f,name);
 
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	file = filesys_open(name);
+	/* If open fail, return -1. */
 	if(file == NULL){
-		lock_release(file_lock);
+		lock_release(&file_lock);
 		f->eax = -1;
 		return;
 	}
-	//file_deny_write(file);
+	/* Assign fd, insert to list. */
 	f->eax = add_file_info(file);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
 }
 
@@ -241,18 +251,21 @@ static void filesize_handler(struct intr_frame *f){
 	int size;
 	int fd;
 
+	/* Get arguments from user stack */
 	fd = *((int*)(f->esp+4));
+
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 
 	struct file_info * fi = search_file_info(fd);
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	size = file_length(fi->file);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
 	f->eax = size;
-
 }
+
 static void read_handler(struct intr_frame *f){
 	int fd;
 	void * buffer;
@@ -261,11 +274,13 @@ static void read_handler(struct intr_frame *f){
 	struct file_info * fi;
 	unsigned bytes_read = 0;
 
+	/* Get arguments from user stack */
 	fd = *((int *)(f->esp + 4));
 	buffer = *((void **)(f->esp+8));
 	size = *((unsigned *)(f->esp+12));
-	check_ustack_boundaries(f, 3); //3 arg
 
+	/* Check validity of arguments */
+	check_ustack_boundaries(f, 3); //3 arg
 	check_user_pointer(f,buffer);
 
 	fi  = search_file_info(fd);
@@ -273,7 +288,6 @@ static void read_handler(struct intr_frame *f){
 		f->eax = 0;
 		return;
 	}
-
 
 	/* Read from keyboard */
 	if(fd == 0){
@@ -288,15 +302,14 @@ static void read_handler(struct intr_frame *f){
 	}
 
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	bytes_read = file_read(fi->file, buffer, size);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
 	f->eax = bytes_read;
 }
 
 static void write_handler(struct intr_frame * f){
-	//just handle writing to console for now. 
 	int bytes_written = 0;
 	struct file_info * fi;
 
@@ -304,29 +317,31 @@ static void write_handler(struct intr_frame * f){
 	void * buffer;
 	unsigned size;
 
+	/* Get arguments from user stack */
 	fd = *((int *)(f->esp + 4));
 	buffer = *((void **)(f->esp + 8));
 	size = *((unsigned *)(f->esp + 12));
 
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 3); //3 arg
-
 	check_user_pointer(f,buffer);
 
 	/* Write to console */
 	if(fd == 1){
 		putbuf(buffer, size);
 		bytes_written = size;
-	}else{
+	}
 
+	else{
 		fi = search_file_info(fd);
 		if(fi == NULL){
 			f->eax = 0;
 			return;
 		}
 
-		lock_acquire(file_lock);
+		lock_acquire(&file_lock);
 		bytes_written = file_write(fi->file, buffer, size);
-		lock_release(file_lock);
+		lock_release(&file_lock);
 	}
 
 	f->eax = bytes_written;
@@ -338,16 +353,18 @@ static void seek_handler(struct intr_frame *f){
 	unsigned position;
 	struct file_info * fi;
 
+	/* Get arguments from user stack */
 	fd = *((int *)(f->esp + 4));
 	position = *((unsigned *)(f->esp+8));
 
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 2); //2 arg
 
 	fi = search_file_info(fd);
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	file_seek(fi->file,position);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 }
 
 static void tell_handler(struct intr_frame *f){
@@ -355,15 +372,17 @@ static void tell_handler(struct intr_frame *f){
 	int position;
 	struct file_info * fi;
 
+	/* Get arguments from user stack */
 	fd = *((int *)(f->esp + 4));
 
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 
 	fi = search_file_info(fd);
 
-	lock_acquire(file_lock);
+	lock_acquire(&file_lock);
 	position = file_tell(fi->file);
-	lock_release(file_lock);
+	lock_release(&file_lock);
 
 	f->eax = position;
 }
@@ -372,34 +391,30 @@ static void close_handler(struct intr_frame *f){
 	int fd;
 	struct file_info * fi;
 
-
+	/* Get arguments from user stack */
 	fd = *((int *)(f->esp + 4));
 
+	/* Check validity of arguments */
 	check_ustack_boundaries(f, 1); //1 arg
 
 	fi = search_file_info(fd);
 
 	if(fi!=NULL){
-		lock_acquire(file_lock);
-		//MUST call allow write before close, since closing will shut off connection of file->inode, and will not be able decrement deny_write_cnt in inode.
-		//Therefore call first and decrement inode count, then close.
+		lock_acquire(&file_lock);
 
 		file_close(fi->file);
-
 		list_remove(&fi->file_info_elem);
+		free(fi);	//free since we don't need the fd anymore once we close. 
 
-		free(fi);
-
-		lock_release(file_lock);
-
-
-		//take out of list
-		//list_remove(&fi->file_info_elem);
+		lock_release(&file_lock);
 	}
 }
 
 
-/* Searches the children of the given thread/process. */
+
+/* -------------- Helper function definitions -------------- */
+
+/* Returns child with pid amongst children owned by thread. */
 static struct child * search_child(struct thread * t, pid_t pid){
   struct list_elem *e;
   struct child * c;
@@ -415,6 +430,7 @@ static struct child * search_child(struct thread * t, pid_t pid){
   return NULL;
 }
 
+/* Return file_info struct with specified file descriptor amongst list owned by thread*/
 static struct file_info * search_file_info(int fd){
 	struct list_elem * e;
 	struct list * file_info_list;
@@ -439,6 +455,7 @@ static void check_ustack_boundaries(struct intr_frame *f, int no_of_args){
 	}
 }
 
+/* Checks the validity of pointers handed by user thread. */
 static void check_user_pointer(struct intr_frame *f, void * user_ptr){
 	void * kernel_address;
 
@@ -470,7 +487,7 @@ static void check_user_pointer(struct intr_frame *f, void * user_ptr){
 	/* User-ptr is valid if reached here. */	
 }
 
-/* Very similar to exit_handler. newly defined with -1 exit status because esp might be invalid. */
+/* Function similar to exit_handler. Newly defined with -1 exit status because esp might be invalid. */
 void terminate_thread(){
 	struct thread * cur;
 	int pid;
@@ -510,7 +527,3 @@ static int add_file_info(struct file * f){
 }
 
 
-void init_file_lock(){
-	file_lock = malloc(sizeof(struct lock));
-	lock_init(file_lock);
-}

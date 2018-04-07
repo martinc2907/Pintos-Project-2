@@ -71,7 +71,6 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
-extern struct lock * file_lock;
 
 
 /* Initializes the threading system by transforming the code
@@ -305,9 +304,12 @@ thread_exit (void)
   intr_disable ();
   list_remove (&thread_current()->allelem);
 
-  palloc_free_page(cur->file_name);
 
-  file_close(thread_current()->file);//file exec stuff- reenables writes.
+  /* Reenable writes to the program file */
+  file_close(thread_current()->file); //use instead of file_enable_write since it also frees file and possibly inode. 
+
+  /* Freeing things. */
+  palloc_free_page(cur->file_name);
 
   /* Free all children structs */
   while(!list_empty(&cur->children_list))
@@ -327,8 +329,8 @@ thread_exit (void)
     free(fi);
   }
 
-  thread_current ()->status = THREAD_DYING;
 
+  thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }
@@ -502,6 +504,7 @@ init_thread (struct thread *t, const char *name, int priority, void * aux)
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 
+  /* Pass on info to current thread from bundle */
   if(aux != NULL){
     bundle = aux;
     t->parent = bundle->parent;
@@ -513,8 +516,6 @@ init_thread (struct thread *t, const char *name, int priority, void * aux)
   list_init(&t->file_info_list);
   t->max_fd = 2;
   sema_init(&t->load_sema, 0);
-
-  
   
 }
 

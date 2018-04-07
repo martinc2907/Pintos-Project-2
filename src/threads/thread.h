@@ -98,17 +98,17 @@ struct thread
 
 
     /* Used in userprog */
-    struct list children_list;
-    struct thread * parent;
+    struct list children_list;          /* List of child threads spawned by this thread */
+    struct thread * parent;             /* Pointer to parent thread */
 
-    struct list file_info_list;
-    int max_fd; 
+    struct list file_info_list;         /* List of file_info structs owned by this thread */
+    int max_fd;                         /* File descriptor to allocate upon open(). Incremented by 1 every time. */
 
-    char * file_name;
-    struct semaphore load_sema;
-    bool load_success;
+    char * file_name;                   /* Name of program file- needed for printing exit msgs. */
+    struct semaphore load_sema;         /* Semaphore for blocking parent thread until child loaded. */
+    bool load_success;                  /* Check for success of child's load. */
 
-    struct file * file; //used for denying writes to executing files.
+    struct file * file;                 /* Pointer to own program file. Used for denying writes. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -120,22 +120,25 @@ struct thread
   };
 
 
+/* Struct representing child thread data */
 struct child {
-  pid_t pid;
-  struct semaphore sema;  /* Used for wait. Initialised to 0. Upped when child dies. */
-  int exit_status;
-  bool wait_status;
+  pid_t pid;                         
+  struct semaphore sema;                /* Used for wait. Initialised to 0. Upped when child dies. */
+  int exit_status;                      /* Exit status updated if child exited. */
+  bool wait_status;                     /* Has wait been called on it already? */
   struct list_elem child_list_elem;
 };
 
+/* Struct representing data that's handed over to child from parent upon creation */
 struct info_bundle{
   char * file_name;
   struct thread * parent;
 };
 
+/* Struct represesnting a file's data */
 struct file_info{
-  struct file * file;
-  int fd;
+  struct file * file; 
+  int fd;                                /* File descriptor */
   struct list_elem file_info_elem;
 };
 

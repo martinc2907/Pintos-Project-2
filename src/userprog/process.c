@@ -21,11 +21,14 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+/* Helper functions */
 static struct child * add_child(struct thread * parent, pid_t pid);
 static struct child * search_child(pid_t pid);
 
+/* Lock for file system. */
+extern struct lock file_lock;
 
-extern struct lock * file_lock;
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -61,9 +64,6 @@ process_execute (const char *file_name)
     return -1;
   }
 
-  // /* Add child to current thread's children list */
-  // add_child(tid); //must be added before child exits.
-
   return tid;
 }
 
@@ -77,12 +77,7 @@ start_process (void *aux)
   struct intr_frame if_;
   bool success;
 
-  /* done using bundle */
-  bundle = (struct info_bundle *)aux;
-  free(bundle);
-
-
-  /* ----------------Parsing args declarations ----------------- */
+    /* ----------------Parsing args declarations ----------------- */
 
   int i = 0;
   /* For parsing arguments */
@@ -108,6 +103,9 @@ start_process (void *aux)
 
   /* ----------------------------------------------- */
 
+  /* done using bundle. free it. */
+  bundle = (struct info_bundle *)aux;
+  free(bundle);
 
   /* Initialise the arrays of pointers. */
   parsed_tokens = palloc_get_page(0);
@@ -142,7 +140,7 @@ start_process (void *aux)
   /* Notify parent thread of load status */
   struct thread * parent = thread_current()->parent;
   parent->load_success = success;
-  sema_up(&parent->load_sema);
+  sema_up(&parent->load_sema);  //unblock parent.
 
 
   /* If load success, prepare stack. */
@@ -218,28 +216,6 @@ start_process (void *aux)
     if_.esp -= 4;
     memcpy(if_.esp, filler_four, 4);
 
-
-    // /* Check stack */
-    // void * esp_copy = if_.esp;
-    // printf("CHECKING STACK: address,value ___________\n");
-
-    // // 1) Check return address.
-    // printf("return address: %x, %d\n", (int)esp_copy, *(int *)esp_copy);
-
-    // // 2) Check argc.
-    // esp_copy += 4;
-    // printf("argc: %x, %d\n", (int)esp_copy, *(int *)esp_copy);
-
-    // // 3) Check argv.
-    // esp_copy += 4;
-    // printf("argv: %x, %x\n", (int)esp_copy, *(int *)esp_copy);
-
-    // // 4) Check argv[0].
-    // printf("argv[0]: %x, %s\n", (int)esp_copy, *(char **)esp_copy);
-
-    // // 5) Check argv[1].
-    // esp_copy+=4;
-    // printf("argv[1]: %x, %s\n", (int)esp_copy, *(char **)esp_copy);
 
     free(filler);
     free(filler_four);
@@ -453,9 +429,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  lock_acquire(file_lock);
+  lock_acquire(&file_lock);
   file = filesys_open (file_name);
-  lock_release(file_lock);
+  lock_release(&file_lock);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
