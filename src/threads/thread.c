@@ -71,6 +71,9 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+extern struct lock * file_lock;
+
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -289,6 +292,8 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
+  struct thread * cur = thread_current();
+
 
 #ifdef USERPROG
   process_exit ();
@@ -299,8 +304,31 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
-  file_close(thread_current()->file);//file exec stuff.
+
+  palloc_free_page(cur->file_name);
+
+  file_close(thread_current()->file);//file exec stuff- reenables writes.
+
+  /* Free all children structs */
+  while(!list_empty(&cur->children_list))
+  {
+    struct list_elem *e = list_pop_front(&cur->children_list);
+    struct child * c = list_entry(e, struct child, child_list_elem);
+    free(c);
+  }
+
+   /* Free all file_info structs */
+  while(!list_empty(&cur->file_info_list))
+  {
+    struct list_elem *e = list_pop_front(&cur->file_info_list);
+    struct file_info * fi = list_entry(e, struct file_info, file_info_elem);
+    //if it's in list, struct itself and its file hasn't been freed.
+    file_close(fi->file);
+    free(fi);
+  }
+
   thread_current ()->status = THREAD_DYING;
+
   schedule ();
   NOT_REACHED ();
 }

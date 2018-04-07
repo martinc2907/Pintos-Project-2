@@ -348,8 +348,6 @@ static void seek_handler(struct intr_frame *f){
 	lock_acquire(file_lock);
 	file_seek(fi->file,position);
 	lock_release(file_lock);
-
-
 }
 
 static void tell_handler(struct intr_frame *f){
@@ -389,7 +387,11 @@ static void close_handler(struct intr_frame *f){
 		file_close(fi->file);
 
 		list_remove(&fi->file_info_elem);
+
+		free(fi);
+
 		lock_release(file_lock);
+
 
 		//take out of list
 		//list_remove(&fi->file_info_elem);
@@ -495,7 +497,7 @@ void terminate_thread(){
 /* Add file info */
 static int add_file_info(struct file * f){
 	struct thread * cur = thread_current();
-	struct file_info * fi = palloc_get_page(0);
+	struct file_info * fi = malloc(sizeof(struct file_info));
 
 	fi->file = f;
 	fi->fd = cur->max_fd;
@@ -509,6 +511,6 @@ static int add_file_info(struct file * f){
 
 
 void init_file_lock(){
-	file_lock = palloc_get_page(0);
+	file_lock = malloc(sizeof(struct lock));
 	lock_init(file_lock);
 }

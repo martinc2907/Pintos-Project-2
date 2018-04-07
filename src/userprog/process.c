@@ -24,6 +24,9 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static struct child * add_child(struct thread * parent, pid_t pid);
 static struct child * search_child(pid_t pid);
 
+
+extern struct lock * file_lock;
+
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -69,10 +72,15 @@ process_execute (const char *file_name)
 static void
 start_process (void *aux)
 {
-  struct info_bundle * bundle = (struct info_bundle *)aux;
+  struct info_bundle * bundle; 
   char *file_name = bundle->file_name;
   struct intr_frame if_;
   bool success;
+
+  /* done using bundle */
+  bundle = (struct info_bundle *)aux;
+  free(bundle);
+
 
   /* ----------------Parsing args declarations ----------------- */
 
@@ -248,13 +256,6 @@ start_process (void *aux)
     palloc_free_page(file_name);
     thread_exit();
   }
-
-
-
-  // /* If load failed, quit. */
-  // palloc_free_page (file_name);
-  // if (!success) 
-  //   thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -452,7 +453,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  lock_acquire(file_lock);
   file = filesys_open (file_name);
+  lock_release(file_lock);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
